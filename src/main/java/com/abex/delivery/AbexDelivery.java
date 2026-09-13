@@ -1,6 +1,8 @@
 package com.abex.delivery;
 
 import org.bukkit.Bukkit;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.*;
@@ -11,78 +13,191 @@ import java.util.*;
 import java.util.regex.*;
 
 public class AbexDelivery extends JavaPlugin {
-    private String apiKey, projectId, email, password, storeId, ownerUID;
-    private int interval;
 
-    private String idToken = null;
-    private String refreshToken = null;
+    private static final String API_KEY = "AIzaSyDUNJFGmKxu3HFvdW_kQczHLzuwefOQo04";
+    private static final String PROJECT_ID = "abex-786e7";
+
+    private String email, password, storeId, ownerUID;
+    private int interval = 300;
+    private String idToken, refreshToken;
     private long tokenExpiry = 0;
+
+    private String setupCode = null;
+    private boolean isSetupMode = false;
+    private int setupPollCount = 0;
 
     @Override
     public void onEnable() {
-        saveDefaultConfig();
-        apiKey     = getConfig().getString("firebase.api-key", "");
-        projectId  = getConfig().getString("firebase.project-id", "");
-        email      = getConfig().getString("auth.email", "");
-        password   = getConfig().getString("auth.password", "");
-        storeId    = getConfig().getString("store.id", "");
-        ownerUID   = getConfig().getString("store.owner-uid", "");
-        interval   = getConfig().getInt("poll-interval-seconds", 300);
-
-        if (apiKey.isEmpty() || email.isEmpty() || ownerUID.isEmpty()) {
-            getLogger().severe("config.yml incomplete! Check api-key, email, owner-uid");
+        loadData();
+        if (email == null || storeId == null || ownerUID == null) {
+            getLogger().info("========================================");
+            getLogger().info(" AbexDelivery - Not Connected Yet");
+            getLogger().info(" Type '/abex setup' in Minecraft to connect.");
+            getLogger().info("========================================");
             return;
         }
-
         if (!signIn()) {
-            getLogger().severe("Firebase login failed! Check email/password");
+            getLogger().warning("AbexBase login failed. Try /abex reset then /abex setup");
             return;
         }
+        startDeliveryPolling();
+        getLogger().info("AbexDelivery connected to store: " + storeId);
+    }
 
-        Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::pollOnce,
+    private void startDeliveryPolling() {
+        Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::pollDeliveries,
                 20L * 5, 20L * interval);
-        getLogger().info("AbexDelivery started for store: " + storeId);
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
+        if (!cmd.getName().equalsIgnoreCase("abex")) return false;
+        if (args.length == 0) { showHelp(sender); return true; }
+        switch (args[0].toLowerCase()) {
+            case "setup": handleSetup(sender); return true;
+            case "status": showStatus(sender); return true;
+            case "reset": handleReset(sender); return true;
+            default: showHelp(sender); return true;
+        }
+    }
+
+    private void showHelp(CommandSender s) {
+        s.sendMessage("§6§l═══ AbexDelivery ═══");
+        s.sendMessage("§e/abex setup §7- Connect to your store");
+        s.sendMessage("§e/abex status §7- Show connection status");
+        s.sendMessage("§e/abex reset §7- Disconnect");
+    }
+
+    private void handleSetup(CommandSender s) {
+        if (email != null && storeId != null) {
+            s.sendMessage("§cAlready connected to: §e" + storeId);
+            s.sendMessage("§7Run §e/abex reset §7first.");
+            return;
+        }
+        if (isSetupMode) {
+            s.sendMessage("§eSetup in progress. Code: §a" + setupCode);
+            return;
+        }
+        setupCode = "ABX-" + randomCode(4) + "-" + randomCode(4);
+        isSetupMode = true;
+        setupPollCount = 0;
+        if (!createSetupEntry()) {
+            s.sendMessage("§cFailed to create setup. Check internet.");
+            isSetupMode = false;
+            setupCode = null;
+            return;
+        }
+        s.sendMessage("");
+        s.sendMessage("§6§l╔══════════════════════════════╗");
+        s.sendMessage("§6§l║    §e§lABEXDELIVERY SETUP§6§l    ║");
+        s.sendMessage("§6§l╠══════════════════════════════╣");
+        s.sendMessage("§6§l║  §fCode: §a§l" + setupCode + "  §6§l");
+        s.sendMessage("§6§l╠══════════════════════════════╣");
+        s.sendMessage("§6§l║  §71. Open Control Room      §6§l║");
+        s.sendMessage("§6§l║  §72. Click 'Connect Plugin' §6§l║");
+        s.sendMessage("§6§l║  §73. Enter this code        §6§l║");
+        s.sendMessage("§6§l╚══════════════════════════════╝");
+        s.sendMessage("");
+        s.sendMessage("§7Waiting... §8(expires in 10 min)");
+        pollSetup();
+    }
+
+    private void pollSetup() {
+        if (!isSetupMode || setupCode == null) return;
+        if (setupPollCount++ > 200) {
+            isSetupMode = false;
+            deleteSetupEntry();
+            Bukkit.broadcastMessage("§c[AbexDelivery] Setup timed out.");
+            setupCode = null;
+            return;
+        }
+        Bukkit.getScheduler().runTaskLaterAsynchronously(this, () -> {
+            if (!isSetupMode || setupCode == null) return;
+            try {
+                String res = fetchSetupEntry();
+                if (res == null) { pollSetup(); return; }
+                String status = jsonValue(res, "status");
+                if ("connected".equals(status)) {
+                    String newEmail = jsonValue(res, "pluginEmail");
+                    String newPassword = jsonValue(res, "pluginPassword");
+                    String newStoreId = jsonValue(res, "storeId");
+                    String newOwnerUID = jsonValue(res, "ownerUID");
+                    if (newEmail != null && newPassword != null && newStoreId != null && newOwnerUID != null) {
+                        email = newEmail;
+                        password = newPassword;
+                        storeId = newStoreId;
+                        ownerUID = newOwnerUID;
+                        saveData();
+                        deleteSetupEntry();
+                        if (signIn()) {
+                            isSetupMode = false;
+                            setupCode = null;
+                            startDeliveryPolling();
+                            Bukkit.broadcastMessage("§a§l[AbexDelivery] §r§aConnected to: §e" + storeId);
+                        } else {
+                            Bukkit.broadcastMessage("§c[AbexDelivery] Login failed.");
+                            isSetupMode = false;
+                            setupCode = null;
+                        }
+                        return;
+                    }
+                }
+            } catch (Exception ignored) {}
+            pollSetup();
+        }, 60L);
+    }
+
+    private void handleReset(CommandSender s) {
+        email = null; password = null; storeId = null; ownerUID = null;
+        idToken = null; refreshToken = null; tokenExpiry = 0;
+        isSetupMode = false;
+        if (setupCode != null) { deleteSetupEntry(); setupCode = null; }
+        File dataFile = new File(getDataFolder(), "data.yml");
+        if (dataFile.exists()) dataFile.delete();
+        s.sendMessage("§aReset complete. Run §e/abex setup §ato reconnect.");
+    }
+
+    private void showStatus(CommandSender s) {
+        if (email == null) {
+            s.sendMessage("§6Status: §cNot connected");
+            return;
+        }
+        s.sendMessage("§6§l═══ AbexDelivery ═══");
+        s.sendMessage("§7Store: §f" + storeId);
+        s.sendMessage("§7Email: §f" + email);
+        s.sendMessage("§7Status: §a§lCONNECTED ✓");
     }
 
     private boolean signIn() {
         try {
-            URL url = new URL("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + apiKey);
+            URL url = new URL("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + API_KEY);
             HttpURLConnection c = (HttpURLConnection) url.openConnection();
             c.setRequestMethod("POST");
             c.setDoOutput(true);
             c.setRequestProperty("Content-Type", "application/json");
-
             String body = "{\"email\":\"" + esc(email) + "\",\"password\":\"" + esc(password) + "\",\"returnSecureToken\":true}";
             try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
-
-            if (c.getResponseCode() != 200) {
-                getLogger().warning("Login HTTP " + c.getResponseCode());
-                return false;
-            }
+            if (c.getResponseCode() != 200) return false;
             String res = readAll(c.getInputStream());
-            idToken      = jsonValue(res, "idToken");
+            idToken = jsonValue(res, "idToken");
             refreshToken = jsonValue(res, "refreshToken");
             String expiresIn = jsonValue(res, "expiresIn");
             long secs = 3600;
             try { secs = Long.parseLong(expiresIn); } catch (Exception ignored) {}
             tokenExpiry = System.currentTimeMillis() + (secs - 60) * 1000L;
             return idToken != null;
-        } catch (Exception e) {
-            getLogger().warning("Login error: " + e.getMessage());
-            return false;
-        }
+        } catch (Exception e) { return false; }
     }
 
     private boolean refreshTokenIfNeeded() {
         if (idToken != null && System.currentTimeMillis() < tokenExpiry) return true;
         if (refreshToken == null) return signIn();
         try {
-            URL url = new URL("https://securetoken.googleapis.com/v1/token?key=" + apiKey);
+            URL url = new URL("https://securetoken.googleapis.com/v1/token?key=" + API_KEY);
             HttpURLConnection c = (HttpURLConnection) url.openConnection();
             c.setRequestMethod("POST");
             c.setDoOutput(true);
             c.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-
             String body = "grant_type=refresh_token&refresh_token=" + refreshToken;
             try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
             if (c.getResponseCode() != 200) return signIn();
@@ -94,12 +209,11 @@ public class AbexDelivery extends JavaPlugin {
         } catch (Exception e) { return signIn(); }
     }
 
-    private void pollOnce() {
+    private void pollDeliveries() {
         if (!refreshTokenIfNeeded()) return;
         try {
-            String urlStr = "https://firestore.googleapis.com/v1/projects/" + projectId
+            String urlStr = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
                     + "/databases/(default)/documents:runQuery";
-
             String queryJson = "{"
                 + "\"structuredQuery\":{"
                 +   "\"from\":[{\"collectionId\":\"deliveries\"}],"
@@ -115,7 +229,6 @@ public class AbexDelivery extends JavaPlugin {
                 +           "\"op\":\"EQUAL\",\"value\":{\"booleanValue\":false}}}"
                 +       "]}}}"
                 + "}";
-
             URL url = new URL(urlStr);
             HttpURLConnection c = (HttpURLConnection) url.openConnection();
             c.setRequestMethod("POST");
@@ -123,59 +236,43 @@ public class AbexDelivery extends JavaPlugin {
             c.setRequestProperty("Content-Type", "application/json");
             c.setRequestProperty("Authorization", "Bearer " + idToken);
             try (OutputStream o = c.getOutputStream()) { o.write(queryJson.getBytes(StandardCharsets.UTF_8)); }
-
-            if (c.getResponseCode() != 200) {
-                getLogger().warning("Query HTTP " + c.getResponseCode());
-                return;
-            }
-            String res = readAll(c.getInputStream());
-            processResults(res);
-        } catch (Exception e) {
-            getLogger().warning("Poll error: " + e.getMessage());
-        }
+            if (c.getResponseCode() != 200) return;
+            processResults(readAll(c.getInputStream()));
+        } catch (Exception e) { getLogger().warning("Poll error: " + e.getMessage()); }
     }
 
     private void processResults(String json) {
         Matcher m = Pattern.compile("\"name\"\\s*:\\s*\"projects/[^\"]+/documents/deliveries/([^\"]+)\"").matcher(json);
-        List<String> docIds = new ArrayList<>();
-        while (m.find()) {
-            String id = m.group(1);
-            if (!docIds.contains(id)) docIds.add(id);
-        }
-        for (String docId : docIds) executeOrder(docId, json);
+        Set<String> ids = new LinkedHashSet<>();
+        while (m.find()) ids.add(m.group(1));
+        for (String id : ids) executeOrder(id, json);
     }
 
     private void executeOrder(String docId, String json) {
         try {
             int pos = json.indexOf("deliveries/" + docId);
             if (pos < 0) return;
-            String chunk = json.substring(pos, Math.min(json.length(), pos + 3000));
-
+            String chunk = json.substring(pos, Math.min(json.length(), pos + 5000));
             List<String> cmds = extractStringArray(chunk, "commands");
             if (cmds.isEmpty()) return;
-
             Bukkit.getScheduler().runTask(this, () -> {
                 for (String raw : cmds) {
                     String cmd = raw.startsWith("/") ? raw.substring(1) : raw;
                     try { Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd); }
                     catch (Exception ex) { getLogger().warning("Cmd failed: " + cmd); }
                 }
-                getLogger().info("Delivered " + docId + " (" + cmds.size() + " cmds)");
+                getLogger().info("Delivered " + docId);
             });
-
             markDelivered(docId);
-        } catch (Exception e) {
-            getLogger().warning("Exec error " + docId + ": " + e.getMessage());
-        }
+        } catch (Exception e) { getLogger().warning("Exec error: " + e.getMessage()); }
     }
 
     private void markDelivered(String docId) throws IOException {
-        String urlStr = "https://firestore.googleapis.com/v1/projects/" + projectId
+        String urlStr = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
                 + "/databases/(default)/documents/deliveries/" + docId
                 + "?updateMask.fieldPaths=delivered&updateMask.fieldPaths=deliveredAt";
         String body = "{\"fields\":{\"delivered\":{\"booleanValue\":true},"
                     + "\"deliveredAt\":{\"integerValue\":\"" + System.currentTimeMillis() + "\"}}}";
-
         URL url = new URL(urlStr);
         HttpURLConnection c = (HttpURLConnection) url.openConnection();
         c.setRequestMethod("PATCH");
@@ -184,6 +281,83 @@ public class AbexDelivery extends JavaPlugin {
         c.setRequestProperty("Authorization", "Bearer " + idToken);
         try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
         c.getResponseCode();
+    }
+
+    private boolean createSetupEntry() {
+        try {
+            String url = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
+                    + "/databases/(default)/documents/plugin-setup?documentId=" + setupCode;
+            String body = "{\"fields\":{"
+                    + "\"status\":{\"stringValue\":\"waiting\"},"
+                    + "\"createdAt\":{\"integerValue\":\"" + System.currentTimeMillis() + "\"}"
+                    + "}}";
+            URL u = new URL(url);
+            HttpURLConnection c = (HttpURLConnection) u.openConnection();
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setRequestProperty("Content-Type", "application/json");
+            try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
+            return c.getResponseCode() == 200;
+        } catch (Exception e) { return false; }
+    }
+
+    private String fetchSetupEntry() {
+        try {
+            URL url = new URL("https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
+                    + "/databases/(default)/documents/plugin-setup/" + setupCode);
+            HttpURLConnection c = (HttpURLConnection) url.openConnection();
+            c.setRequestMethod("GET");
+            if (c.getResponseCode() != 200) return null;
+            return readAll(c.getInputStream());
+        } catch (Exception e) { return null; }
+    }
+
+    private void deleteSetupEntry() {
+        try {
+            URL url = new URL("https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
+                    + "/databases/(default)/documents/plugin-setup/" + setupCode);
+            HttpURLConnection c = (HttpURLConnection) url.openConnection();
+            c.setRequestMethod("DELETE");
+            c.getResponseCode();
+        } catch (Exception ignored) {}
+    }
+
+    private void loadData() {
+        File dataFile = new File(getDataFolder(), "data.yml");
+        if (!dataFile.exists()) return;
+        try {
+            Properties props = new Properties();
+            try (FileInputStream in = new FileInputStream(dataFile)) { props.load(in); }
+            email = props.getProperty("email");
+            password = props.getProperty("password");
+            storeId = props.getProperty("store-id");
+            ownerUID = props.getProperty("owner-uid");
+            interval = Integer.parseInt(props.getProperty("poll-interval-seconds", "300"));
+        } catch (Exception e) { getLogger().warning("Failed to load data.yml"); }
+    }
+
+    private void saveData() {
+        try {
+            if (!getDataFolder().exists()) getDataFolder().mkdirs();
+            File dataFile = new File(getDataFolder(), "data.yml");
+            Properties props = new Properties();
+            props.setProperty("email", email);
+            props.setProperty("password", password);
+            props.setProperty("store-id", storeId);
+            props.setProperty("owner-uid", ownerUID);
+            props.setProperty("poll-interval-seconds", String.valueOf(interval));
+            try (FileOutputStream out = new FileOutputStream(dataFile)) {
+                props.store(out, "AbexDelivery Connection Data - DO NOT SHARE");
+            }
+        } catch (Exception e) { getLogger().warning("Failed to save data.yml"); }
+    }
+
+    private String randomCode(int len) {
+        String chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        StringBuilder sb = new StringBuilder();
+        Random r = new Random();
+        for (int i = 0; i < len; i++) sb.append(chars.charAt(r.nextInt(chars.length())));
+        return sb.toString();
     }
 
     private String jsonValue(String j, String k) {
@@ -228,5 +402,6 @@ public class AbexDelivery extends JavaPlugin {
         return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    @Override public void onDisable() { idToken = null; refreshToken = null; }
+    @Override
+    public void onDisable() { idToken = null; refreshToken = null; }
 }
