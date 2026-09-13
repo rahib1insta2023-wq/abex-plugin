@@ -1,13 +1,21 @@
-firebase:
-  api-key: "AIzaSyDUNJFGmKxu3HFvdW_kQczHLzuwefOQo04"
-  project-id: "abex-786e7"
+# ═══════════════════════════════════════════
+#         AbexDelivery Configuration
+# ═══════════════════════════════════════════
+#
+# Plugin connection credentials আর এখানে
+# রাখতে হবে না। /abex setup command দিয়ে
+# auto-connect হবে।
+#
+# ═══════════════════════════════════════════
 
-auth:
-  email: "plugin-abexstore@fake.com"
-  password: "AbexStore#2024!xyz"
+settings:
+  # কত সেকেন্ড পর পর Firebase চেক করবে
+  # কম হলে = দ্রুত delivery, কিন্তু বেশি Firebase usage
+  # বেশি হলে = ধীর delivery, কিন্তু কম Firebase usage
+  poll-interval-seconds: 300
 
-store:
-  id: "ceo-store"
-  owner-uid: "NiYilJpfKoPXGBfxeSZfptkhPvT2"
+  # Setup code কতক্ষণ valid থাকবে (seconds)
+  setup-timeout-seconds: 600
 
-poll-interval-seconds: 300
+  # Debug mode (test করার জন্য)
+  debug: false
