@@ -2,3 +2,17 @@ name: AbexDelivery
 version: 1.0
 main: com.abex.delivery.AbexDelivery
 api-version: '1.16'
+author: AbexBuilder
+description: Auto delivery plugin for AbexBuilder stores
+
+commands:
+  abex:
+    description: AbexDelivery setup commands
+    usage: /abex <setup|status|reset>
+    permission: abex.admin
+    permission-message: You don't have permission to use this command.
+
+permissions:
+  abex.admin:
+    description: Allows using /abex commands
+    default: op
