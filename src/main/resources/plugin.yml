@@ -1,0 +1,4 @@
+name: AbexDelivery
+version: 1.0
+main: com.abex.delivery.AbexDelivery
+api-version: '1.16'
