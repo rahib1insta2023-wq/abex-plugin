@@ -1,0 +1,13 @@
+firebase:
+  api-key: "AIzaSyDUNJFGmKxu3HFvdW_kQczHLzuwefOQo04"
+  project-id: "abex-786e7"
+
+auth:
+  email: "plugin-abexstore@fake.com"
+  password: "AbexStore#2024!xyz"
+
+store:
+  id: "ceo-store"
+  owner-uid: "NiYilJpfKoPXGBfxeSZfptkhPvT2"
+
+poll-interval-seconds: 300
