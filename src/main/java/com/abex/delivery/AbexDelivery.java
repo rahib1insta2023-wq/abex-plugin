@@ -1,8 +1,10 @@
 package com.abex.delivery;
 
 import org.bukkit.Bukkit;
+import org.bukkit.Sound;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.*;
@@ -289,37 +291,66 @@ public class AbexDelivery extends JavaPlugin {
             String chunk = json.substring(pos, Math.min(json.length(), pos + 5000));
             List<String> cmds = extractStringArray(chunk, "commands");
             if (cmds.isEmpty()) return;
+            
+            String username = jsonValue(chunk, "username");
+            final String playerName = (username != null && !username.isEmpty()) ? username : "Player";
+            String storeName = jsonValue(chunk, "storeId");
+            final String store = (storeName != null && !storeName.isEmpty()) ? storeName : "Store";
+            
             Bukkit.getScheduler().runTask(this, () -> {
+                // Execute commands
                 for (String raw : cmds) {
                     String cmd = raw.startsWith("/") ? raw.substring(1) : raw;
                     try { Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd); }
                     catch (Exception ex) { getLogger().warning("Cmd failed: " + cmd); }
                 }
-                getLogger().info("Delivered order " + docId);
+                
+                // 🔔🎵 Play sound to ALL online players
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    try {
+                        p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 1.0f);
+                        p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.5f);
+                    } catch (Exception ignored) {}
+                }
+                
+                // 🎨🎉 Full Color + Bold Broadcast Message
+                Bukkit.broadcastMessage("");
+                Bukkit.broadcastMessage("§8§m                                                        ");
+                Bukkit.broadcastMessage("§6§l  ✦ §e§lORDER §a§lDELIVERED §e§l✦");
+                Bukkit.broadcastMessage("§8§m                                                        ");
+                Bukkit.broadcastMessage("§f  §b§l▶ §fPlayer: §e§l" + playerName);
+                Bukkit.broadcastMessage("§f  §b§l▶ §fStore:  §a§l" + store);
+                Bukkit.broadcastMessage("§f  §b§l▶ §a§lSay §e§lGG §a§lfor §e§l" + playerName + " §a§l!");
+                Bukkit.broadcastMessage("§8§m                                                        ");
+                Bukkit.broadcastMessage("");
+                
+                getLogger().info("Delivered order " + docId + " to " + playerName + " from store " + store);
             });
             markDelivered(docId);
-        } catch (Exception e) { getLogger().warning("Exec error: " + e.getMessage()); }
+        } catch (Exception e) {
+            getLogger().warning("Exec error: " + e.getMessage());
+        }
     }
 
     private void markDelivered(String docId) throws IOException {
-    String urlStr = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
-            + "/databases/(default)/documents/deliveries/" + docId
-            + "?updateMask.fieldPaths=delivered&updateMask.fieldPaths=deliveredAt";
-    String body = "{\"fields\":{\"delivered\":{\"booleanValue\":true},"
-                + "\"deliveredAt\":{\"integerValue\":\"" + System.currentTimeMillis() + "\"}}}";
-    URL url = new URL(urlStr);
-    HttpURLConnection c = (HttpURLConnection) url.openConnection();
-    c.setRequestMethod("POST");
-    c.setRequestProperty("X-HTTP-Method-Override", "PATCH");
-    c.setDoOutput(true);
-    c.setRequestProperty("Content-Type", "application/json");
-    c.setRequestProperty("Authorization", "Bearer " + idToken);
-    try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
-    int code = c.getResponseCode();
-    if (code != 200 && code != 201) {
-        getLogger().warning("markDelivered HTTP " + code);
+        String urlStr = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
+                + "/databases/(default)/documents/deliveries/" + docId
+                + "?updateMask.fieldPaths=delivered&updateMask.fieldPaths=deliveredAt";
+        String body = "{\"fields\":{\"delivered\":{\"booleanValue\":true},"
+                    + "\"deliveredAt\":{\"integerValue\":\"" + System.currentTimeMillis() + "\"}}}";
+        URL url = new URL(urlStr);
+        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+        c.setRequestMethod("POST");
+        c.setRequestProperty("X-HTTP-Method-Override", "PATCH");
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type", "application/json");
+        c.setRequestProperty("Authorization", "Bearer " + idToken);
+        try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
+        int code = c.getResponseCode();
+        if (code != 200 && code != 201) {
+            getLogger().warning("markDelivered HTTP " + code);
+        }
     }
-}
 
     private boolean createSetupEntry() {
         try {
@@ -400,10 +431,8 @@ public class AbexDelivery extends JavaPlugin {
 
     // ─── JSON Parser (both flat + Firestore nested format) ───
     private String jsonValue(String j, String k) {
-        // Try Firestore nested format first: {"fieldName":{"stringValue":"value"}}
         Matcher m1 = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
         if (m1.find()) return m1.group(1).replace("\\\"", "\"").replace("\\\\", "\\");
-        // Fallback to flat format: {"fieldName":"value"}
         Matcher m2 = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
         return m2.find() ? m2.group(1).replace("\\\"", "\"").replace("\\\\", "\\") : null;
     }
