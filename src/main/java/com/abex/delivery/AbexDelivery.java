@@ -18,7 +18,7 @@ public class AbexDelivery extends JavaPlugin {
     private static final String PROJECT_ID = "abex-786e7";
 
     private String email, password, storeId, ownerUID;
-    private int interval = 300;
+    private int interval = 120;
     private String idToken, refreshToken;
     private long tokenExpiry = 0;
 
@@ -370,7 +370,7 @@ public class AbexDelivery extends JavaPlugin {
             password = props.getProperty("password");
             storeId = props.getProperty("store-id");
             ownerUID = props.getProperty("owner-uid");
-            interval = Integer.parseInt(props.getProperty("poll-interval-seconds", "300"));
+            interval = Integer.parseInt(props.getProperty("poll-interval-seconds", "120"));
         } catch (Exception e) { getLogger().warning("Failed to load data.yml"); }
     }
 
