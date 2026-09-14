@@ -360,30 +360,22 @@ public class AbexDelivery extends JavaPlugin {
         return sb.toString();
     }
 
+    // ─── JSON Parser (Firestore nested format support) ───
     private String jsonValue(String j, String k) {
-        Matcher m = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
+        Matcher m = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
         return m.find() ? m.group(1).replace("\\\"", "\"").replace("\\\\", "\\") : null;
     }
 
     private List<String> extractStringArray(String j, String k) {
         List<String> out = new ArrayList<>();
-        int i = j.indexOf("\"" + k + "\"");
-        if (i < 0) return out;
-        int s = j.indexOf('[', i);
-        if (s < 0) return out;
-        int e = s + 1, d = 1; boolean str = false;
-        while (e < j.length()) {
-            char c = j.charAt(e);
-            if (c == '\\' && str) { e += 2; continue; }
-            if (c == '"') str = !str;
-            if (!str) {
-                if (c == '[') d++;
-                else if (c == ']') { d--; if (d == 0) break; }
-            }
-            e++;
-        }
-        String inner = j.substring(s + 1, e);
-        Matcher m = Pattern.compile("\"((?:\\\\.|[^\"\\\\])*)\"").matcher(inner);
+        int keyIdx = j.indexOf("\"" + k + "\"");
+        if (keyIdx < 0) return out;
+        int arrStart = j.indexOf('[', keyIdx);
+        if (arrStart < 0) return out;
+        int arrEnd = j.indexOf(']', arrStart);
+        if (arrEnd < 0) return out;
+        String arrayContent = j.substring(arrStart + 1, arrEnd);
+        Matcher m = Pattern.compile("\"stringValue\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(arrayContent);
         while (m.find()) {
             String v = m.group(1).replace("\\\"", "\"").replace("\\\\", "\\").replace("\\n", "\n");
             out.add(v);
