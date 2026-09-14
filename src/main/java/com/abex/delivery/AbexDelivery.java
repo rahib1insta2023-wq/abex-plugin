@@ -302,20 +302,24 @@ public class AbexDelivery extends JavaPlugin {
     }
 
     private void markDelivered(String docId) throws IOException {
-        String urlStr = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
-                + "/databases/(default)/documents/deliveries/" + docId
-                + "?updateMask.fieldPaths=delivered&updateMask.fieldPaths=deliveredAt";
-        String body = "{\"fields\":{\"delivered\":{\"booleanValue\":true},"
-                    + "\"deliveredAt\":{\"integerValue\":\"" + System.currentTimeMillis() + "\"}}}";
-        URL url = new URL(urlStr);
-        HttpURLConnection c = (HttpURLConnection) url.openConnection();
-        c.setRequestMethod("PATCH");
-        c.setDoOutput(true);
-        c.setRequestProperty("Content-Type", "application/json");
-        c.setRequestProperty("Authorization", "Bearer " + idToken);
-        try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
-        c.getResponseCode();
+    String urlStr = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID
+            + "/databases/(default)/documents/deliveries/" + docId
+            + "?updateMask.fieldPaths=delivered&updateMask.fieldPaths=deliveredAt";
+    String body = "{\"fields\":{\"delivered\":{\"booleanValue\":true},"
+                + "\"deliveredAt\":{\"integerValue\":\"" + System.currentTimeMillis() + "\"}}}";
+    URL url = new URL(urlStr);
+    HttpURLConnection c = (HttpURLConnection) url.openConnection();
+    c.setRequestMethod("POST");
+    c.setRequestProperty("X-HTTP-Method-Override", "PATCH");
+    c.setDoOutput(true);
+    c.setRequestProperty("Content-Type", "application/json");
+    c.setRequestProperty("Authorization", "Bearer " + idToken);
+    try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
+    int code = c.getResponseCode();
+    if (code != 200 && code != 201) {
+        getLogger().warning("markDelivered HTTP " + code);
     }
+}
 
     private boolean createSetupEntry() {
         try {
