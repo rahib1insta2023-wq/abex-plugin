@@ -37,16 +37,22 @@ public class AbexDelivery extends JavaPlugin {
             return;
         }
         if (!signIn()) {
-            getLogger().warning("AbexBase login failed. Try /abex reset then /abex setup");
+            getLogger().warning("========================================");
+            getLogger().warning(" AbexBase login FAILED");
+            getLogger().warning(" Run: /abex reset");
+            getLogger().warning(" Then: /abex setup");
+            getLogger().warning("========================================");
             return;
         }
         startDeliveryPolling();
-        getLogger().info("AbexDelivery connected to store: " + storeId);
+        getLogger().info("========================================");
+        getLogger().info(" AbexDelivery connected to store: " + storeId);
+        getLogger().info("========================================");
     }
 
     private void startDeliveryPolling() {
         Bukkit.getScheduler().runTaskTimerAsynchronously(this, this::pollDeliveries,
-                20L * 5, 20L * interval);
+                20L * 10, 20L * interval);
     }
 
     @Override
@@ -129,16 +135,32 @@ public class AbexDelivery extends JavaPlugin {
                         ownerUID = newOwnerUID;
                         saveData();
                         deleteSetupEntry();
-                        if (signIn()) {
-                            isSetupMode = false;
-                            setupCode = null;
-                            startDeliveryPolling();
-                            Bukkit.broadcastMessage("§a§l[AbexDelivery] §r§aConnected to: §e" + storeId);
-                        } else {
-                            Bukkit.broadcastMessage("§c[AbexDelivery] Login failed.");
-                            isSetupMode = false;
-                            setupCode = null;
-                        }
+                        getLogger().info("Got credentials. Email: " + email);
+                        Bukkit.broadcastMessage("§a§l[AbexDelivery] §r§aConnected to: §e" + storeId);
+                        getLogger().info("Waiting 10 seconds for Firebase account activation...");
+                        // Delay sign-in to let Firebase account propagate
+                        Bukkit.getScheduler().runTaskLaterAsynchronously(this, () -> {
+                            if (signIn()) {
+                                isSetupMode = false;
+                                setupCode = null;
+                                startDeliveryPolling();
+                                Bukkit.broadcastMessage("§a§l[AbexDelivery] §r§aLogin successful! Plugin is live.");
+                            } else {
+                                getLogger().warning("First login failed. Retrying in 20 seconds...");
+                                Bukkit.getScheduler().runTaskLaterAsynchronously(this, () -> {
+                                    if (signIn()) {
+                                        isSetupMode = false;
+                                        setupCode = null;
+                                        startDeliveryPolling();
+                                        Bukkit.broadcastMessage("§a§l[AbexDelivery] §r§aLogin successful! Plugin is live.");
+                                    } else {
+                                        Bukkit.broadcastMessage("§c[AbexDelivery] Login failed. Run /abex reset then /abex setup again.");
+                                        isSetupMode = false;
+                                        setupCode = null;
+                                    }
+                                }, 20L * 20);
+                            }
+                        }, 20L * 10);
                         return;
                     }
                 }
@@ -165,7 +187,11 @@ public class AbexDelivery extends JavaPlugin {
         s.sendMessage("§6§l═══ AbexDelivery ═══");
         s.sendMessage("§7Store: §f" + storeId);
         s.sendMessage("§7Email: §f" + email);
-        s.sendMessage("§7Status: §a§lCONNECTED ✓");
+        if (idToken != null && System.currentTimeMillis() < tokenExpiry) {
+            s.sendMessage("§7Status: §a§lCONNECTED ✓");
+        } else {
+            s.sendMessage("§7Status: §eLogged out (will retry)");
+        }
     }
 
     private boolean signIn() {
@@ -177,7 +203,13 @@ public class AbexDelivery extends JavaPlugin {
             c.setRequestProperty("Content-Type", "application/json");
             String body = "{\"email\":\"" + esc(email) + "\",\"password\":\"" + esc(password) + "\",\"returnSecureToken\":true}";
             try (OutputStream o = c.getOutputStream()) { o.write(body.getBytes(StandardCharsets.UTF_8)); }
-            if (c.getResponseCode() != 200) return false;
+            int code = c.getResponseCode();
+            if (code != 200) {
+                String err = "";
+                try { err = readAll(c.getErrorStream()); } catch (Exception ignored) {}
+                getLogger().warning("Login HTTP " + code + ": " + err);
+                return false;
+            }
             String res = readAll(c.getInputStream());
             idToken = jsonValue(res, "idToken");
             refreshToken = jsonValue(res, "refreshToken");
@@ -186,7 +218,10 @@ public class AbexDelivery extends JavaPlugin {
             try { secs = Long.parseLong(expiresIn); } catch (Exception ignored) {}
             tokenExpiry = System.currentTimeMillis() + (secs - 60) * 1000L;
             return idToken != null;
-        } catch (Exception e) { return false; }
+        } catch (Exception e) {
+            getLogger().warning("Login exception: " + e.getMessage());
+            return false;
+        }
     }
 
     private boolean refreshTokenIfNeeded() {
@@ -261,7 +296,7 @@ public class AbexDelivery extends JavaPlugin {
                     try { Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd); }
                     catch (Exception ex) { getLogger().warning("Cmd failed: " + cmd); }
                 }
-                getLogger().info("Delivered " + docId);
+                getLogger().info("Delivered order " + docId);
             });
             markDelivered(docId);
         } catch (Exception e) { getLogger().warning("Exec error: " + e.getMessage()); }
@@ -360,7 +395,6 @@ public class AbexDelivery extends JavaPlugin {
         return sb.toString();
     }
 
-    // ─── JSON Parser (Firestore nested format support) ───
     private String jsonValue(String j, String k) {
         Matcher m = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
         return m.find() ? m.group(1).replace("\\\"", "\"").replace("\\\\", "\\") : null;
