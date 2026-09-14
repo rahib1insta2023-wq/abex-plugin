@@ -138,7 +138,6 @@ public class AbexDelivery extends JavaPlugin {
                         getLogger().info("Got credentials. Email: " + email);
                         Bukkit.broadcastMessage("§a§l[AbexDelivery] §r§aConnected to: §e" + storeId);
                         getLogger().info("Waiting 10 seconds for Firebase account activation...");
-                        // Delay sign-in to let Firebase account propagate
                         Bukkit.getScheduler().runTaskLaterAsynchronously(this, () -> {
                             if (signIn()) {
                                 isSetupMode = false;
@@ -395,9 +394,14 @@ public class AbexDelivery extends JavaPlugin {
         return sb.toString();
     }
 
+    // ─── JSON Parser (both flat + Firestore nested format) ───
     private String jsonValue(String j, String k) {
-        Matcher m = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
-        return m.find() ? m.group(1).replace("\\\"", "\"").replace("\\\\", "\\") : null;
+        // Try Firestore nested format first: {"fieldName":{"stringValue":"value"}}
+        Matcher m1 = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
+        if (m1.find()) return m1.group(1).replace("\\\"", "\"").replace("\\\\", "\\");
+        // Fallback to flat format: {"fieldName":"value"}
+        Matcher m2 = Pattern.compile("\"" + Pattern.quote(k) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").matcher(j);
+        return m2.find() ? m2.group(1).replace("\\\"", "\"").replace("\\\\", "\\") : null;
     }
 
     private List<String> extractStringArray(String j, String k) {
